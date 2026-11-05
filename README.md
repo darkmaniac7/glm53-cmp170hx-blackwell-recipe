@@ -6,7 +6,8 @@ Blackwell cards as the first stage and the CMPs behind it.
 
 This is not a fork and not a standalone recipe. The engine, the patches that make GLM-5.3 run on these cards, the
 checkpoint conversion and the P2P driver build are cebeuq's; start there. What is here sits on top of his
-repository at commit `31c0934` and is offered back to it as three pull requests.
+repository at commit `31c0934` and is offered back to it as three pull requests
+([1](https://github.com/cebeuq/glm53-cmp170hx-recipe/pull/1), [2](https://github.com/cebeuq/glm53-cmp170hx-recipe/pull/2), [3](https://github.com/cebeuq/glm53-cmp170hx-recipe/pull/3)).
 
 Everything below was measured on my own hardware between 2026-10-27 and 2026-11-05. Numbers carry their
 conditions; where something was not measured it says so.

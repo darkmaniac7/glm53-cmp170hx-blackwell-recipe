@@ -7,9 +7,9 @@ overlay directory mirrors the recipe's tree, so applying one is a copy.
 
 | Overlay | What it does | Compose file | Offered upstream as |
 |---|---|---|---|
-| [ppfix](ppfix/) | pipeline hand-off fix for TP > 1 | `compose.ppfix.yaml` | branch `pp-handoff-fix` |
-| [g4](g4/) | grammar bitmask for draft tokens: structured output with speculative decoding | `compose.grammar.yaml` | branch `grammar-bitmask-drafts` |
-| [sq](sq/) | probabilistic drafts under PipeSpec for sampled requests | `compose.sq.yaml` | branch `probabilistic-drafts` |
+| [ppfix](ppfix/) | pipeline hand-off fix for TP > 1 | `compose.ppfix.yaml` | [pull request 1](https://github.com/cebeuq/glm53-cmp170hx-recipe/pull/1) |
+| [g4](g4/) | grammar bitmask for draft tokens: structured output with speculative decoding | `compose.grammar.yaml` | [pull request 2](https://github.com/cebeuq/glm53-cmp170hx-recipe/pull/2) |
+| [sq](sq/) | probabilistic drafts under PipeSpec for sampled requests | `compose.sq.yaml` | [pull request 3](https://github.com/cebeuq/glm53-cmp170hx-recipe/pull/3) |
 
 They were written against the recipe at commit `31c0934958a8b0892b6de139e37d2bfe18926ae4` and the image
 `lazymio/vllm-backport@sha256:2627d2a97e7f539b99ac98f511c589f5f520d3fc5630b195aca7f6ef865ead4e`. Mounted over any
