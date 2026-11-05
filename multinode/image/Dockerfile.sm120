@@ -1,0 +1,5 @@
+# Engine image for the Blackwell node: the base image with vLLM's two compiled extension libraries rebuilt for
+# TORCH_CUDA_ARCH_LIST "8.0 12.0" (build-sm120.sh puts them next to this file).
+#   docker build -t glm53-multinode:sm120 -f Dockerfile.sm120 .
+FROM glm53-multinode:base
+COPY _C_stable_libtorch.abi3.so _moe_C_stable_libtorch.abi3.so /usr/local/lib/python3.12/dist-packages/vllm/

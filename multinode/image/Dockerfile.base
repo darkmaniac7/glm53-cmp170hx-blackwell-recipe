@@ -1,0 +1,13 @@
+# Engine image for every CMP 170HX node: cebeuq's pinned sm_80 image plus the RDMA userspace NCCL needs to run
+# over the link between the hosts. Python and vLLM are untouched; the recipe's patches are bind-mounted at run time.
+#   docker build -t glm53-multinode:base -f Dockerfile.base .
+ARG BASE=lazymio/vllm-backport@sha256:2627d2a97e7f539b99ac98f511c589f5f520d3fc5630b195aca7f6ef865ead4e
+FROM ${BASE}
+ARG DEBIAN_FRONTEND=noninteractive
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libibverbs1 ibverbs-providers librdmacm1 rdma-core ibverbs-utils \
+    && rm -rf /var/lib/apt/lists/*
+# ray is not used by the multiprocess executor of this layout. It is listed because the measured image has it.
+RUN python3 -m pip install --no-cache-dir "ray[default]==2.59.0" \
+    && python3 -c "import ray, vllm; print('ray', ray.__version__, 'vllm', vllm.__version__)"

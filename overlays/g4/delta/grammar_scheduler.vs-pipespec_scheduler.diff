@@ -1,0 +1,23 @@
+--- a/patches/vllm/pipespec_scheduler.py
++++ b/patches/vllm/pipespec_scheduler.py
+@@ -1932,7 +1932,19 @@
+             structured_output_request_ids,
+             scheduler_output.scheduled_spec_decode_tokens,
+         )
+-        return GrammarOutput(structured_output_request_ids, bitmask)
++        # recipe (port of vLLM #54442): drafts past the first -1 placeholder were
++        # verified against permissive rows (async scheduling schedules with
++        # placeholders; under PP decode staggering the sampling is not deferred
++        # and the real drafts never reach this bitmask), so the worker must
++        # reject them. Real, grammar-validated drafts count in full.
++        spec_tokens = scheduler_output.scheduled_spec_decode_tokens
++        num_acceptable_drafts = [
++            len(strip_speculative_padding(spec_tokens.get(req_id, [])))
++            for req_id in structured_output_request_ids
++        ]
++        return GrammarOutput(
++            structured_output_request_ids, bitmask, num_acceptable_drafts
++        )
+ 
+     def update_from_output(
+         self,

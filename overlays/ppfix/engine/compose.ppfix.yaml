@@ -1,0 +1,8 @@
+# Overlay: pipeline hand-off fix for TP > 1. The fork returns a stage's hidden_states un-reduced (MoE
+# reduce_results=False, the all-reduce is fused into the next layer norm), but gpu_worker lets the PP send and
+# receive slice hidden_states per TP rank and all-gather the slices, which mixes two partial sums. The patched
+# gpu_worker sends hidden_states whole. See cebeuq's docs/known-limits.md, "the pipeline hand-off at TP2".
+services:
+  vllm:
+    volumes:
+      - ../patches/vllm/ppfix_gpu_worker.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu_worker.py:ro

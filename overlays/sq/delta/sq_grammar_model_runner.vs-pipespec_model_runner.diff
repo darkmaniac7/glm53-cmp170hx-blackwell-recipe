@@ -1,0 +1,78 @@
+--- a/patches/vllm/pipespec_model_runner.py
++++ b/patches/vllm/pipespec_model_runner.py
+@@ -165,7 +165,10 @@
+ from vllm.v1.worker.gpu.spec_decode.speculator import DraftModelSpeculator
+ from vllm.v1.worker.gpu.spec_decode.utils import DraftTokensHandler
+ from vllm.v1.worker.gpu.states import RequestState
+-from vllm.v1.worker.gpu.structured_outputs import StructuredOutputsWorker
++from vllm.v1.worker.gpu.structured_outputs import (
++    StructuredOutputsWorker,
++    grammar_invalid_drafts,
++)
+ from vllm.v1.worker.gpu.ubatch_utils import (
+     UBatchRunner,
+     UBatchState,
+@@ -1500,6 +1503,7 @@
+             sample_hidden_states = hidden_states[input_batch.logits_indices]
+             logits = self.model.compute_logits(sample_hidden_states)
+ 
++        invalid_drafts = None
+         if grammar_output is not None:
+             # Apply grammar bitmask to the logits in-place.
+             assert self.structured_outputs_worker is not None
+@@ -1509,6 +1513,13 @@
+                 grammar_output.structured_output_request_ids,
+                 grammar_output.grammar_bitmask,
+             )
++            # recipe (port of vLLM #54442): drafts verified against permissive rows
++            # (placeholder bitmask) are rejected by the sampler.
++            invalid_drafts = grammar_invalid_drafts(
++                input_batch,
++                grammar_output.structured_output_request_ids,
++                grammar_output.num_acceptable_drafts,
++            )
+ 
+         sampler_output: SamplerOutput | None
+         if input_batch.num_reqs == 0:
+@@ -1527,6 +1538,7 @@
+                 input_batch,
+                 # Draft logits are needed for probabilistic rejection sampling.
+                 self.speculator.draft_logits,
++                invalid_drafts,
+             )
+ 
+         if shard_metadata is not None:
+@@ -2207,6 +2219,17 @@
+         if self._ps_a_req >= 0 and self._ps_a_drafts is not None:
+             k = self.num_speculative_steps
+             self.req_states.draft_tokens[self._ps_a_req, :k] = self._ps_a_drafts
++            dl = getattr(self.speculator, "draft_logits", None)
++            if dl is not None:
++                # recipe (probabilistic drafts): the restored tokens were drawn
++                # for other positions, so they are not samples of any cached
++                # q here. Give them one-hot draft logits (q(d) = 1): the
++                # rejection sampler then accepts with p(d) and resamples from
++                # p without d, which is exact for a fixed draft. -1e4 is
++                # finite in bf16 and exp(-1e4 / T) underflows to 0 in fp32.
++                row = dl[self._ps_a_req, :k]
++                row.fill_(-1e4)
++                row.scatter_(1, self._ps_a_drafts.view(k, 1), 0.0)
+         self._ps_expect_b = False
+         self._ps_b_valid = False
+         self._ps_pending = None
+@@ -2279,6 +2302,15 @@
+         k = self.num_speculative_steps
+         req_idx = int(input_batch.idx_mapping_np[0])
+         self.req_states.draft_tokens[req_idx, :k] = self._ps_b_drafts
++        dl = getattr(self.speculator, "draft_logits", None)
++        if dl is not None:
++            # recipe (probabilistic drafts): chunk B verifies d4,d5 = chain steps
++            # k+1..2k, whose pre-temperature logits sit in cache columns
++            # k+1..2k (continue_chain wrote them with current_draft_step =
++            # chain step). The rejection sampler indexes column i for chunk
++            # position i, so move them to columns 0..k-1 (A's columns are no
++            # longer needed: A was verified in this same sample_tokens call).
++            dl[req_idx, :k].copy_(dl[req_idx, k + 1 : 2 * k + 1])
+ 
+     def _ps_finish_epoch(
+         self,

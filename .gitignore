@@ -1,0 +1,9 @@
+# local configuration
+multinode/host.env
+# build output of the sm_120 rebuild
+multinode/image/*.so
+build/
+# never commit weights
+*.safetensors
+__pycache__/
+*.pyc

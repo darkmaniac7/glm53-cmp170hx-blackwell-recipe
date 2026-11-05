@@ -1,0 +1,13 @@
+# Overlay: probabilistic drafts under PipeSpec (Gumbel drafts at the request temperature, both chunks verified
+# against the real draft distribution). For a chain WITH compose.grammar.yaml: put this file after
+# compose.pipespec.yaml and compose.grammar.yaml, it replaces their cmp_pipespec.py, speculator.py and
+# model_runner.py mounts. Pair it with "draft_sample_method":"probabilistic" in the speculative config; without
+# that field the files behave like the recipe's.
+services:
+  vllm:
+    environment:
+      CMP_SQ_GREEDY_D3: "${CMP_SQ_GREEDY_D3:-0}"   # 1 = the chain's bonus guess d3 is drawn greedily (no measured gain)
+    volumes:
+      - ../patches/vllm/sq_pipespec_core.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/cmp_pipespec.py:ro
+      - ../patches/vllm/sq_pipespec_ar_speculator.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py:ro
+      - ../patches/vllm/sq_grammar_model_runner.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/model_runner.py:ro

@@ -1,0 +1,11 @@
+# Overlay: probabilistic drafts under PipeSpec, for a chain WITHOUT compose.grammar.yaml. Put it after
+# compose.pipespec.yaml. Same files as compose.sq.yaml except the model runner, which here is the recipe's
+# pipespec_model_runner.py plus the two probabilistic-draft hunks.
+services:
+  vllm:
+    environment:
+      CMP_SQ_GREEDY_D3: "${CMP_SQ_GREEDY_D3:-0}"   # 1 = the chain's bonus guess d3 is drawn greedily (no measured gain)
+    volumes:
+      - ../patches/vllm/sq_pipespec_core.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/cmp_pipespec.py:ro
+      - ../patches/vllm/sq_pipespec_ar_speculator.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/spec_decode/autoregressive/speculator.py:ro
+      - ../patches/vllm/sq_pipespec_model_runner.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/model_runner.py:ro
