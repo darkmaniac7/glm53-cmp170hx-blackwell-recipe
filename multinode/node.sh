@@ -15,8 +15,10 @@
 #   master      MASTER_ADDR         node 0's address on the fast link; MASTER_PORT
 #   partition   PART                layers per pipeline stage (VLLM_PP_LAYER_PARTITION), the same on every node
 #   weights     a per-node "view" (view-build.py): symlinks to only the shards of the node's layers
-#   mounts      mounts.list         the patch files, read-only over the image's files; the same list on every node
+#   mounts      MOUNTS              the patch files, read-only over the image's files; the same list on every node
+#                                   (a file in this directory, default mounts.list)
 #   env         node.env            engine and NCCL environment, plus the per-host interface and address
+#               EXTRA_ENV           the layout's switches, NAME=VALUE separated by spaces (optional)
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 [ $# -eq 3 ] || { echo "usage: node.sh <layout.env> <host.env> <node-rank>"; exit 2; }
@@ -48,10 +50,11 @@ while read -r f t; do
   case $f in ''|'#'*) continue;; esac
   [ -f "$HOST_RECIPE_DIR/patches/vllm/$f" ] || { echo "missing patch file $HOST_RECIPE_DIR/patches/vllm/$f"; bad=1; }
   M+=(-v "$HOST_RECIPE_DIR/patches/vllm/$f:$VLLM/$t:ro")
-done < "$HERE/mounts.list"
+done < "$HERE/${MOUNTS:-mounts.list}"
 [ "$bad" -eq 0 ] || exit 3
 
 SPEC=(); [ -n "${SPEC_JSON:-}" ] && SPEC=(--speculative-config "$SPEC_JSON")
+XENV=(); for kv in ${EXTRA_ENV:-}; do XENV+=(-e "$kv"); done
 HEADLESS=(); [ "$NR" -gt 0 ] && HEADLESS=(--headless)
 # The consumer NVMe that holds the weights gets a read cap (see README: 48 to 81 C in two and a half minutes without it).
 IO=(); [ -n "${HOST_READ_BPS_DEVICE:-}" ] && IO=(--device-read-bps "$HOST_READ_BPS_DEVICE:${HOST_READ_BPS:-450mb}")
@@ -64,7 +67,7 @@ CMD=(docker run -d --name "$C" --hostname "$C" --init --gpus "\"device=$GPUS\"" 
   --shm-size 32g --pids-limit 8192 --memory "$HOST_MEM" --device /dev/infiniband --cap-add IPC_LOCK --ulimit memlock=-1:-1
   "${IO[@]}"
   --env-file "$HERE/node.env" -e "VLLM_HOST_IP=$HOST_ADDR" -e "NCCL_SOCKET_IFNAME=$HOST_IFNAME" -e "GLOO_SOCKET_IFNAME=$HOST_IFNAME"
-  -e "VLLM_PP_LAYER_PARTITION=$PART" -e "CMP_PIPESPEC=${CMP_PIPESPEC:-1}" -e NCCL_DEBUG=WARN
+  -e "VLLM_PP_LAYER_PARTITION=$PART" -e "CMP_PIPESPEC=${CMP_PIPESPEC:-1}" -e NCCL_DEBUG=WARN "${XENV[@]}"
   -v "$VIEW:/model:ro" -v "$HOST_MODEL_DIR:$HOST_MODEL_DIR:ro" -v "$HOST_CACHE_DIR:/cache" -v "$HOST_LOG_DIR:/logs" "${M[@]}"
   "$HOST_IMAGE" /model --served-model-name "${SERVED_MODEL_NAME:-glm-5.3}"
   --tensor-parallel-size "$TP" --pipeline-parallel-size "$PP"
@@ -75,7 +78,7 @@ CMD=(docker run -d --name "$C" --hostname "$C" --init --gpus "\"device=$GPUS\"" 
   --reasoning-parser glm45 --tool-call-parser glm47 --enable-auto-tool-choice "${SPEC[@]}" "${EXTRA[@]}")
 
 if [ "${DRYRUN:-0}" = 1 ]; then
-  echo "node $NR of $NNODES: stages $S0-$S1, layers $A-$B ${FLAGS[*]:-}, gpus $GPUS, ${#M[@]} mount args"
+  echo "node $NR of $NNODES: stages $S0-$S1, layers $A-$B ${FLAGS[*]:-}, gpus $GPUS, ${#M[@]} mount args from ${MOUNTS:-mounts.list}"
   printf ' %q' "${CMD[@]}"; echo
   exit 0
 fi

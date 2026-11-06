@@ -1,12 +1,12 @@
 # GLM-5.3 (753B MoE) on two RTX PRO 6000 Blackwell plus eight CMP 170HX
 
-Additions to [cebeuq's GLM-5.3 recipe for eight CMP 170HX](https://github.com/cebeuq/glm53-cmp170hx-recipe): three
+Additions to [cebeuq's GLM-5.3 recipe for eight CMP 170HX](https://github.com/cebeuq/glm53-cmp170hx-recipe): five
 overlays for his engine, and a recipe for running that engine as one pipeline across two machines, with a pair of
 Blackwell cards as the first stage and the CMPs behind it.
 
 This is not a fork and not a standalone recipe. The engine, the patches that make GLM-5.3 run on these cards, the
 checkpoint conversion and the P2P driver build are cebeuq's; start there. What is here sits on top of his
-repository at commit `31c0934` and is offered back to it as three pull requests
+repository at commit `31c0934`; the first three overlays are offered back to it as pull requests
 ([1](https://github.com/cebeuq/glm53-cmp170hx-recipe/pull/1), [2](https://github.com/cebeuq/glm53-cmp170hx-recipe/pull/2), [3](https://github.com/cebeuq/glm53-cmp170hx-recipe/pull/3)).
 
 Everything below was measured on my own hardware between 2026-10-27 and 2026-11-05. Numbers carry their
@@ -23,15 +23,20 @@ conditions; where something was not measured it says so.
 | KV cache capacity, tokens | 569,792 | 817,024 |
 | Context | 524,288 | 524,288 |
 | Quality gate, agreement with TP8 goldens | 90.1% | 90.2% |
-| Structured output with drafts on | valid, no 5xx | valid, no 5xx |
+| Structured output with drafts on, probe at 1 and 8 streams | valid, no 5xx | valid, no 5xx |
+| Structured requests at 8 streams, accepted drafts per step: g4 / g5 | not measured with g5 | 0.31 / 1.60 |
+| Structured requests at 8 streams, aggregate tok/s: g4 / g5 | not measured with g5 | 76.6 / 133.4 (each constrained stream 1.75 to 1.85x) |
+| json_object with thinking on, 8 streams: replies with empty content, without / with the jor rule | not measured | 35 of 2,400 / 0 of 2,000 |
 | Reload from local copies | 8 to 10 min warm, 22 min cold | 6 to 7 min warm, 11 min first load |
 
 Single-stream rows are 1,024-token answers to three prompts (a JSON array, a Python module, a 900-word essay),
-MTP with 2 draft tokens and PipeSpec on, 8 sequences. Full table, conditions and the six-CMP variant:
+MTP with 2 draft tokens and PipeSpec on, 8 sequences. The structured rows with g5 and jor are from 2026-11-05: the
+g4 overlay's probe at concurrency 8 with the g4 and the g5 engine back to back, and json_object on one fixed prompt
+at temperature 0 and at the engine's sampling defaults. Full table, conditions and the six-CMP variant:
 [docs/outcomes.md](docs/outcomes.md). One single-stream number on this engine moves by about +-5% between reloads:
 [docs/noise.md](docs/noise.md).
 
-## The three overlays
+## The overlays
 
 Each is a set of whole-file patches for the recipe's pinned image plus a compose overlay, in the recipe's own
 form, with a diff of every file against the image original.
@@ -39,8 +44,10 @@ form, with a diff of every file against the image original.
 | Overlay | What it does | Measured | Status |
 |---|---|---|---|
 | [ppfix](overlays/ppfix/) | Fixes the pipeline hand-off for TP > 1: a stage's un-reduced `hidden_states` were sliced per rank and all-gathered, mixing two partial sums. Settles the open question in the recipe's known limits. | Quality gate 86.98% to 90.13% agreement, NLL +0.38% to -0.65%, speed unchanged (8 CMPs, 2026-11-04) | in use since 2026-10-27 |
-| [g4](overlays/g4/) | Structured output with speculative decoding: json_schema and named tool_choice requests could end in HTTP 500 when drafts were on (4 of 24 in one test set). A port of a vLLM fix onto the recipe's PipeSpec scheduler and model runner. | No 5xx and every reply valid at 1 and 8 streams; unconstrained throughput unchanged; constrained decode at 55 to 92% of free decode (8 CMPs, 2026-11-04) | in use since 2026-11-04 |
+| [g4](overlays/g4/) | Structured output with speculative decoding: json_schema and named tool_choice requests could end in HTTP 500 when drafts were on (4 of 24 in one test set). A port of vLLM PR 54442 onto the recipe's PipeSpec scheduler and model runner. | No 5xx and every reply valid at 1 and 8 streams; unconstrained throughput unchanged; constrained decode at 55 to 92% of free decode (8 CMPs, 2026-11-04) | superseded by g5 on 2026-11-05; five of its seven files stay in use under g5 |
 | [sq](overlays/sq/) | Probabilistic drafts under PipeSpec: for sampled requests the drafter samples at the request temperature and both chunks are verified against the real draft distribution. Exact by construction. | Pooled sampled acceptance +8.8% on 8 CMPs and +8% on the two-host layout; raw prose +12% accepted drafts; nothing on code or at temperature 0; tok/s differences inside the noise; gate unchanged (2026-11-04) | in use since 2026-11-04 |
+| [g5](overlays/g5/) | Structured-output requests keep their drafts when several streams share the pipeline: a port of vLLM PR 63219 (drafts kept per request until the scheduler has fetched them). Replaces the g4 fix, whose vLLM PR was reverted in 63219; g4's invalidation stays only as a net. | At 8 streams: accepted drafts per step on structured requests 0.31 to 1.60, each constrained stream 1.75 to 1.85x, aggregate 76.6 to 133.4 tok/s, 0 draft windows left with placeholders, no 5xx (two-host layout, 2026-11-05) | in use since 2026-11-05 |
+| [jor](overlays/jor/) | With thinking on, a request with a grammar could write its JSON inside the thinking block and end the turn there: HTTP 200, empty content. While such a request is in reasoning its stop tokens are masked and their probability goes to the closing think tag. | json_object at 8 streams on one prompt: 35 of 2,400 empty without the rule, 0 of 2,000 with it (Fisher p = 6e-10); with the rule on every structured request left its thinking block, 3,080 of 3,080 (two-host layout, 2026-11-05). On the live engine with both switches: 30 of 30 json_object replies with thinking on valid, 0 empty (2026-11-06) | optional; in use on the two-host layout since 2026-11-06 |
 
 How they stack on the recipe's compose files, and which combinations are valid:
 [overlays/README.md](overlays/README.md).
@@ -98,8 +105,8 @@ and [GLM 5.3 on 8x 8 GB (cebeuq glm53-cmp170hx-recipe)](https://cmp.wiki/wiki/GL
 - **[dealignai](https://huggingface.co/dealignai)** for the abliterated NVFP4 checkpoint, and
   **[Z.ai](https://huggingface.co/zai-org)** for GLM-5.3.
 - **[amoghmunikote/cmpunlocker](https://github.com/amoghmunikote/cmpunlocker)** for the memory unlock.
-- The **[vLLM](https://github.com/vllm-project/vllm)** project, and the authors of its pull request 54442, which
-  the g4 overlay ports.
+- The **[vLLM](https://github.com/vllm-project/vllm)** project, and the authors of its pull requests 54442 and
+  63219, which the g4 and g5 overlays port.
 
 ## Licences
 

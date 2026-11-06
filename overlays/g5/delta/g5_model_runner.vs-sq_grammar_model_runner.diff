@@ -1,0 +1,33 @@
+--- a/patches/vllm/sq_grammar_model_runner.py
++++ b/patches/vllm/sq_grammar_model_runner.py
+@@ -1049,6 +1049,8 @@
+         # Call model_state.remove_request *before* req_states.remove_request
+         # so the model_state can still look up the slot index.
+         self.model_state.remove_request(req_id)
++        # recipe (vLLM #63219): drop the request's retained drafts.
++        self.draft_tokens_handler.discard(req_id)
+         req_idx = self.req_states.remove_request(req_id)
+         if req_idx is None:
+             return False
+@@ -1514,7 +1516,10 @@
+                 grammar_output.grammar_bitmask,
+             )
+             # recipe (port of vLLM #54442): drafts verified against permissive rows
+-            # (placeholder bitmask) are rejected by the sampler.
++            # (placeholder bitmask) are rejected by the sampler. recipe (g5): with
++            # the drafts retained per request the scheduler reports the full
++            # window, so this only fires as the net for a window that still
++            # holds placeholders (scheduler get_grammar_bitmask).
+             invalid_drafts = grammar_invalid_drafts(
+                 input_batch,
+                 grammar_output.structured_output_request_ids,
+@@ -1617,6 +1622,9 @@
+         valid_dummy_state_slots: bool = False,
+     ) -> ModelRunnerOutput | IntermediateTensors | None:
+         if not dummy_run:
++            # recipe (vLLM #63219): tell the draft hand-off which requests
++            # the scheduler will fetch for this step's deferred bitmask.
++            self.draft_tokens_handler.begin_step(scheduler_output)
+             # Update the request states.
+             self.update_pp_decode_requests()
+             self.finish_requests(scheduler_output)

@@ -1,0 +1,3 @@
+7685fdf382076994847ee08d9628106869386e3b11406e6e547bb98ca4b76745  patches/vllm/g5_scheduler.py
+102e904f22d92ad81d323ca430f6e5887c703807ffa8120e039a65b791e133f7  patches/vllm/g5_model_runner.py
+2f0a7109942451bf5c092661e9eebd2b12c2e9e804ce25f4a73be6a8043b4d39  patches/vllm/g5_spec_decode_utils.py

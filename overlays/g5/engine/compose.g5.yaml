@@ -1,0 +1,15 @@
+# Overlay: structured-output requests keep their drafts under the pipeline's decode stagger. A port of vLLM #63219
+# (per-request DraftTokensHandler) onto this image and onto the PipeSpec scheduler and model runner; it replaces the
+# g4 approach (vLLM #54442, which vLLM reverted) as the fix and keeps the g4 invalidation only as a net.
+# Must come after compose.pipespec.yaml, compose.grammar.yaml and compose.sq.yaml in COMPOSE_FILE: it replaces their
+# scheduler.py and model_runner.py mounts (same container path, the later file wins). The other five files of
+# compose.grammar.yaml stay mounted. The model runner carries the sq hunks (inert without probabilistic drafts).
+services:
+  vllm:
+    environment:
+      CMP_G5_NET: "${CMP_G5_NET:-1}"     # 1 = keep the g4 invalidation for a draft window that still holds placeholders; 0 = vLLM #63219 as merged
+      CMP_G5_LOG: "${CMP_G5_LOG:-2000}"  # log the "CMP g5:" counter line every N structured draft windows; 0 = never
+    volumes:
+      - ../patches/vllm/g5_scheduler.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/core/sched/scheduler.py:ro
+      - ../patches/vllm/g5_model_runner.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/model_runner.py:ro
+      - ../patches/vllm/g5_spec_decode_utils.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/spec_decode/utils.py:ro

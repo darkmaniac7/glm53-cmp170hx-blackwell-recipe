@@ -1,0 +1,2 @@
+4f2b55ec6dccebd9e43db78a132215146cb43652280dc6ad2b2356ba8c654e59  patches/vllm/jor_structured_output_init.py
+98b03a3ef44c99016f1bc84c99f10c300c25d8d5cebfaed4dcefcbe50cb5f1c4  patches/vllm/jor_gpu_structured_outputs.py
