@@ -11,7 +11,7 @@ mirrors the recipe's tree, so applying one is a copy.
 | [g4](g4/) | grammar bitmask for draft tokens: structured output with speculative decoding | `compose.grammar.yaml` | five of its seven files in use under g5; its fix is superseded by g5 | [pull request 2](https://github.com/cebeuq/glm53-cmp170hx-recipe/pull/2) |
 | [sq](sq/) | probabilistic drafts under PipeSpec for sampled requests | `compose.sq.yaml` | in use | [pull request 3](https://github.com/cebeuq/glm53-cmp170hx-recipe/pull/3) |
 | [g5](g5/) | structured-output requests keep their drafts (port of vLLM PR 63219); replaces the g4 fix | `compose.g5.yaml` | in use since 2026-11-05 | |
-| [jor](jor/) | no end of turn inside the thinking block for requests with a grammar | `compose.jor.yaml` | optional | |
+| [jor](jor/) | no end of turn inside the thinking block for requests with a grammar | `compose.jor.yaml` | optional; in use since 2026-11-06 | |
 
 They were written against the recipe at commit `31c0934958a8b0892b6de139e37d2bfe18926ae4` and the image
 `lazymio/vllm-backport@sha256:2627d2a97e7f539b99ac98f511c589f5f520d3fc5630b195aca7f6ef865ead4e`. Mounted over any

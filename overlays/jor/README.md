@@ -43,16 +43,19 @@ temperature 0 and at the engine's sampling defaults:
 
 | | invalid replies (empty content) |
 |---|---:|
-| Switches off (the engine before the change, and the same files with both switches unset) | 29 of 2,000 |
+| Switches off (the engine before and after the change, and the same files with both switches unset) | 35 of 2,400 |
 | `CMP_JO_NOSTOP=1` (half of the requests with `CMP_JO_REDIRECT` on as well) | 0 of 2,000 |
 
-Fisher exact test: p = 3.4e-9. Over every structured request with thinking on that the engine served with the rule
+Fisher exact test: p = 6e-10. Over every structured request with thinking on that the engine served with the rule
 on, all kinds together, the model left its thinking block 3,080 times in 3,080. No HTTP 5xx, no grammar error, no
 reply cut by `max_tokens`. The schema and tool kinds stayed valid. A reply that had written its JSON inside the
 thinking block now closes the block and writes it again as content, so that reply is longer; every other request
 runs as before, at the same speed and with the same accepted drafts. With the mask alone, at a sampling
 temperature, some of those replies left a stray token or a line of filler inside the block before closing it; with
 the redirect the closing tag is the clear next token, which is why jor sets both.
+
+**On the live engine** (two-host layout, both switches on, 2026-11-06): a 30-request json_object probe with thinking
+on returned 30 valid replies, 0 empty.
 
 **Not measured.** The eight CMPs alone; streaming requests; structured requests mixed with long chat streams in one
 batch; a client stop string; `tool_choice` required or auto; a thinking block that never closes (the request would

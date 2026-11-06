@@ -63,9 +63,10 @@ Blackwell stage adds about 10% single-stream, 13 to 28% 8-stream aggregate, abou
   nothing moved beyond the run-to-run spread.
 - **No end of turn inside the thinking block** (overlay `jor`, on top of g5, 2026-11-05): json_object with thinking on
   at 8 streams on one fixed prompt, at temperature 0 and at the sampling defaults, came back with empty content in
-  29 of 2,000 replies without the rule and in 0 of 2,000 with it (Fisher exact p = 3.4e-9). With the rule on, every
-  structured request left its thinking block (3,080 of 3,080). Optional; the alternative without an engine change
-  is to skip the thinking for structured requests (`"thinking_token_budget": 0`).
+  35 of 2,400 replies without the rule and in 0 of 2,000 with it (Fisher exact p = 6e-10). With the rule on, every
+  structured request left its thinking block (3,080 of 3,080). On the live engine with both switches (2026-11-06) a
+  30-request json_object probe with thinking on returned 30 valid replies, 0 empty. Optional; the alternative
+  without an engine change is to skip the thinking for structured requests (`"thinking_token_budget": 0`).
 
 ## Choosing the split
 
