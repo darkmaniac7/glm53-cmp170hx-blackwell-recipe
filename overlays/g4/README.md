@@ -1,5 +1,13 @@
 # g4: grammar bitmask for draft tokens
 
+**Superseded by [g5](../g5/) since 2026-11-05.** g4 ports vLLM PR 54442, which vLLM reverted in PR 63219 for its
+cost on constrained requests under pipeline parallelism with speculative decoding; PR 63219 fixes the race at its
+source, and g5 ports it. g4's fix made structured output safe by throwing away the drafts of a constrained request
+whose bitmask came from placeholders; g5 keeps those drafts (0.31 to 1.60 accepted drafts per step on structured
+requests at 8 streams). Five of the seven files below stay in use under g5, which keeps g4's invalidation as a net;
+`grammar_scheduler.py` and `grammar_model_runner.py` are replaced by g5's. The text below is the record of g4 as it
+was measured and offered upstream.
+
 Structured output (`response_format` json_schema or json_object, a named `tool_choice`) together with speculative
 decoding. The full write-up is [docs/structured-output.md](docs/structured-output.md).
 
@@ -37,7 +45,7 @@ sampler that will not accept them. Seven files, mounted by `engine/compose.gramm
   (json_object) where an unconstrained one ran at 75.
 
 **Limits.** vLLM later replaced this fix with one at the source of the race (PR 63219, per-request draft retention),
-which keeps the drafts of constrained requests. That is not ported here.
+which keeps the drafts of constrained requests. The [g5](../g5/) overlay ports it.
 
 **Use.** Append `:compose.grammar.yaml` to `COMPOSE_FILE` after `compose.pipespec.yaml`. Check with
 `python3 bench/struct_probe.py http://127.0.0.1:8000 glm-5.3 1 10 c1` and `... 8 3 c8`.

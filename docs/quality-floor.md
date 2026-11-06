@@ -34,7 +34,9 @@ tokens): 0.61 to 0.70 with greedy and with probabilistic drafts alike, which is 
 
 `struct_probe.py` (in [overlays/g4](../overlays/g4/bench/struct_probe.py)) at concurrency 1 and 8: json_schema
 strict, a named tool choice, json_object and an unconstrained control. Pass means no HTTP 5xx and every constrained
-reply parses and matches its schema.
+reply parses and matches its schema. A json_object reply with empty content and the JSON in the reasoning field is
+the model ending its turn inside its thinking block, not a grammar failure. Without the [jor](../overlays/jor/) rule
+it is rare, so a single probe run shows it only now and then; a failure of any other shape is a real one.
 
 ## 3. Speculative acceptance
 

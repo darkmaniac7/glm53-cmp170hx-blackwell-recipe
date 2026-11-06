@@ -23,16 +23,19 @@ run it.
 |---|---|
 | `node.sh` | starts one node: builds the node's view of the weights, then one `docker run` |
 | `layouts/pp5bw30.env` | TP2 x PP5: two Blackwells + eight CMPs (the layout of the outcomes page) |
+| `layouts/pp5bw30-jor.env` | pp5bw30 with the optional jor overlay and its switches ([overlays/jor](../overlays/jor/)) |
 | `layouts/l62b.env` | TP2 x PP4: two Blackwells + six CMPs, two CMPs free |
 | `host.env.example` | per-host values: addresses, image, paths, memory, read cap |
-| `mounts.list` | the 22 patch files every node mounts, with their targets |
+| `mounts.list` | the 23 patch files every node mounts, with their targets (ppfix, g4, sq, g5; the default) |
+| `mounts-jor.list` | the same with the two jor files in place of two g4 files |
+| `mounts-g4.list` | the 22 files of the set before 2026-11-05 (ppfix, g4, sq), for history |
 | `node.env` | engine and NCCL environment of every node |
 | `view-build.py` | per-node directory with only the node's shards and a filtered index |
 | `image/` | Dockerfiles for the two images and the sm_120 rebuild script |
 
 ## Procedure
 
-1. **Recipe and overlays, on both hosts, same content.** Clone cebeuq's recipe and copy this repository's three
+1. **Recipe and overlays, on both hosts, same content.** Clone cebeuq's recipe and copy this repository's five
    overlays into it:
    `tools/apply-overlays.sh /path/to/glm53-cmp170hx-recipe` (see [overlays/README.md](../overlays/README.md)).
    `HOST_RECIPE_DIR` in `host.env` points at that checkout.
@@ -45,7 +48,9 @@ run it.
    hosts), this host's own address and interface, image, paths, memory limit, utilization, loader threads
    (Blackwell host), read cap (CMP host).
 5. **Dry run each node**: `DRYRUN=1 ./node.sh layouts/pp5bw30.env host.env <rank>` prints the layers the node
-   takes and the full `docker run`, and fails on a missing patch file.
+   takes and the full `docker run`, and fails on a missing patch file. A layout picks its patch set with `MOUNTS`
+   (default `mounts.list`) and can add switches to the node environment with `EXTRA_ENV`; `layouts/pp5bw30-jor.env`
+   does both.
 6. **Start, node 0 first.** On the Blackwell host: `./node.sh layouts/pp5bw30.env host.env 0`. Within a few
    seconds, on the CMP host: ranks 1, 2, 3 and 4. All nodes load in parallel; the leader's API answers
    `/health` when every stage is up (6 to 11 minutes from local copies).
@@ -94,8 +99,11 @@ the model-level proof is the quality gate.
 
 ## What was and was not measured
 
-Measured: both layout files, with the mount list and environment of this directory, on the hardware above
-(2026-11-03 to 2026-11-05). Not measured: other cards as the fast stage, a switched or slower link, TCP instead of
-RDMA between the hosts, more than two hosts. The launcher here is the measured one with site paths and operational
-plumbing removed; its dry run was compared against the original's mounts, layer ranges and arguments, and it has
-not itself started an engine.
+Measured: both layout files, with the environment of this directory, on the hardware above (2026-11-03 to
+2026-11-05), with the patch set of `mounts-g4.list` or a part of it, as each number in
+[docs/outcomes.md](../docs/outcomes.md) says. On 2026-11-05 the pp5bw30 layout also ran with the set of `mounts.list`
+(g5) and with that of `mounts-jor.list` plus the jor switches (`pp5bw30-jor.env`); l62b has not run with g5 or jor.
+Not measured: other cards as the fast stage, a switched or slower link, TCP instead of RDMA between the hosts,
+more than two hosts. The launcher here is the measured one with site paths and operational plumbing removed; its
+dry run was compared against the original's mounts, layer ranges and arguments, and it has not itself started an
+engine.

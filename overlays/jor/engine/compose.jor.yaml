@@ -1,0 +1,15 @@
+# Overlay (optional): a request with a grammar (json_object, json_schema, named tool_choice) cannot end its turn
+# inside its thinking block. While such a request is still in reasoning its bitmask rows lose the stop tokens, and
+# the stop probability is moved onto the closing think tag. Without it the model sometimes writes the JSON inside the
+# thinking block and stops there: HTTP 200 with empty content.
+# Must come after compose.g5.yaml in COMPOSE_FILE: it replaces the grammar overlay's structured_output/__init__.py and
+# worker structured_outputs.py mounts. With both switches at 0 the two files build the same rows as the g4 files.
+services:
+  vllm:
+    environment:
+      CMP_JO_NOSTOP: "${CMP_JO_NOSTOP:-1}"            # 1 = no stop token while a request with a grammar is in its thinking block
+      CMP_JO_REDIRECT: "${CMP_JO_REDIRECT:-154842}"   # token id of the closing think tag (GLM-5.3: 154842); the stop probability moves there; 0 = off
+      CMP_JO_LOG: "${CMP_JO_LOG:-2000}"               # log the "CMP jo:" counter line every N reasoning steps; 0 = never
+    volumes:
+      - ../patches/vllm/jor_structured_output_init.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/structured_output/__init__.py:ro
+      - ../patches/vllm/jor_gpu_structured_outputs.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/structured_outputs.py:ro

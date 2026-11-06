@@ -1,0 +1,221 @@
+--- a/patches/vllm/grammar_structured_output_init.py
++++ b/patches/vllm/grammar_structured_output_init.py
+@@ -2,6 +2,7 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ import itertools
+ import multiprocessing
++import os
+ from collections.abc import Iterable, Sequence
+ from concurrent.futures import Future, ThreadPoolExecutor
+ from typing import TYPE_CHECKING
+@@ -33,6 +34,17 @@
+ 
+ logger = init_logger(__name__)
+ 
++# recipe (jor): a structured-output request must not end its turn inside reasoning.
++# NOSTOP=1 clears the request's stop tokens from every bitmask row it gets
++# while it is still in its thinking block (draft rows and the bonus row
++# alike); unset, the rows are the g4 rows. LOG prints the counters every N
++# reasoning steps of structured requests (0 = never).
++_JO_NOSTOP = os.environ.get("CMP_JO_NOSTOP", "0") == "1"
++try:
++    _JO_LOG = max(0, int(os.environ.get("CMP_JO_LOG", "0") or 0))
++except ValueError:
++    _JO_LOG = 0
++
+ 
+ class StructuredOutputManager:
+     """Engine-level manager for structured output requests."""
+@@ -98,6 +110,94 @@
+             self.vllm_config.structured_outputs_config.enable_in_reasoning
+         )
+ 
++        # recipe (jor): stop-token and-masks per stop set; counters (reasoning
++        # steps, rows without stop tokens, drafted stop tokens inside
++        # reasoning, requests that ended inside reasoning).
++        self._jo_cache: dict[tuple[int, ...], tuple[tuple[int, int], ...]] = {}
++        self._jo_stats = [0, 0, 0, 0]
++
++    # recipe (jor) ---------------------------------------------------------------
++    @staticmethod
++    def _jo_stop_ids(
++        request: "Request", reasoner: "ReasoningParser | None" = None
++    ) -> tuple[int, ...]:
++        """The tokens check_stop ends this request on: the primary EOS (None
++        under ignore_eos) and stop_token_ids (which hold the other
++        generation-config EOS ids). A reasoning-end marker the client also
++        gave as a stop token stays allowed: it is the way out of reasoning."""
++        params = request.sampling_params
++        if params is None:
++            return ()
++        ids = set(params.stop_token_ids or ())
++        if params.eos_token_id is not None:
++            ids.add(params.eos_token_id)
++        if reasoner is not None:
++            ids -= set(getattr(reasoner, "reasoning_end_token_ids", None) or ())
++        return tuple(sorted(i for i in ids if i >= 0))
++
++    def _jo_stop_words(
++        self, request: "Request", reasoner: "ReasoningParser | None" = None
++    ) -> tuple[tuple[int, int], ...]:
++        """(word index, int32 and-mask) pairs that clear the request's stop
++        tokens from a bitmask row."""
++        stop_ids = self._jo_stop_ids(request, reasoner)
++        cache = self._jo_cache
++        words = cache.get(stop_ids)
++        if words is None:
++            merged: dict[int, int] = {}
++            for token_id in stop_ids:
++                word = token_id // 32
++                merged[word] = merged.get(word, 0xFFFFFFFF) & ~(1 << (token_id % 32))
++            words = tuple(
++                (word, mask - (1 << 32) if mask >= (1 << 31) else mask)
++                for word, mask in sorted(merged.items())
++            )
++            if len(cache) < 4096:
++                cache[stop_ids] = words
++        return words
++
++    def _jo_forbid_stop(self, index: int, words: tuple[tuple[int, int], ...]) -> None:
++        assert self._grammar_bitmask is not None
++        row = self._grammar_bitmask[index]
++        num_words = row.shape[0]
++        for word, mask in words:
++            if word < num_words:
++                row[word] &= mask
++
++    def _jo_count(self, steps: int, rows: int, draft_stops: int, ended: int) -> None:
++        stats = self._jo_stats
++        before = stats[0]
++        stats[0] += steps
++        stats[1] += rows
++        stats[2] += draft_stops
++        stats[3] += ended
++        if _JO_LOG and (ended or (steps and before // _JO_LOG != stats[0] // _JO_LOG)):
++            logger.info(
++                "CMP jo: nostop %s: %d reasoning steps of structured requests, "
++                "%d rows without stop tokens, %d drafted stop tokens inside "
++                "reasoning, %d requests ended inside reasoning",
++                "on" if _JO_NOSTOP else "off",
++                *stats,
++            )
++
++    def _jo_note_stop_in_reasoning(
++        self, request: "Request", new_token_ids: list[int]
++    ) -> None:
++        """Called when a step left the request inside reasoning: a stop token
++        as its last token means the turn ended there (content stays empty)."""
++        if new_token_ids[-1] not in self._jo_stop_ids(request):
++            return
++        if _JO_NOSTOP:
++            logger.error(
++                "CMP jo: UNEXPECTED: request %s ended on stop token %d inside "
++                "reasoning with nostop on.",
++                request.request_id,
++                new_token_ids[-1],
++            )
++        self._jo_count(0, 0, 0, 1)
++
++    # ----------------------------------------------------------------------
++
+     def _get_reasoner(self, request: "Request") -> "ReasoningParser | None":
+         structured_req = request.structured_output_request
+         if structured_req is None or self.reasoner_cls is None:
+@@ -278,6 +378,22 @@
+             # Wait for all bitmask filling tasks to complete.
+             for promise in promises:
+                 promise.result()
++
++            if _JO_NOSTOP or _JO_LOG:
++                # recipe (jor): one row per request here (no drafts).
++                jo_rows = 0
++                for index, req_id in enumerate(structured_output_request_ids):
++                    request = requests[req_id]
++                    if self.should_fill_bitmask(request):
++                        continue
++                    jo_rows += 1
++                    if _JO_NOSTOP:
++                        self._jo_forbid_stop(
++                            index,
++                            self._jo_stop_words(request, self._get_reasoner(request)),
++                        )
++                if jo_rows:
++                    self._jo_count(jo_rows, jo_rows if _JO_NOSTOP else 0, 0, 0)
+         else:
+             # Fallback to serial filling of bitmasks for small-batch-size cases
+             for req_id in structured_output_request_ids:
+@@ -293,6 +409,29 @@
+ 
+                 reasoner = None if apply_bitmask else self._get_reasoner(request)
+ 
++                # recipe (jor): the request is still in its thinking block at this
++                # step (should_fill_bitmask is True without a reasoner, with
++                # thinking off and once reasoning has ended). Until the
++                # reasoning-end marker shows up in the draft window, every
++                # row it gets (draft rows, rows behind a placeholder, the
++                # bonus row) loses the request's stop tokens: the model has
++                # to close the block before it can end the turn, and a
++                # drafted stop token is rejected against its own row like any
++                # other masked token. Everything else in those rows stays
++                # permissive; grammar rows are never touched.
++                jo_reasoning = (_JO_NOSTOP or _JO_LOG > 0) and not apply_bitmask
++                jo_step = jo_reasoning
++                jo_words = (
++                    self._jo_stop_words(request, reasoner)
++                    if _JO_NOSTOP and jo_reasoning
++                    else None
++                )
++                jo_stop_ids = (
++                    self._jo_stop_ids(request, reasoner) if jo_reasoning else ()
++                )
++                jo_rows = 0
++                jo_draft_stops = 0
++
+                 state_advancements = 0
+                 post_reasoning_end_in_window = False
+                 req_tokens = scheduled_spec_decode_tokens.get(req_id, ())
+@@ -323,11 +462,20 @@
+                         cumulative_index += 1
+                         continue
+                     self._fill_bitmasks(((grammar, cumulative_index, apply_bitmask),))
++                    if jo_reasoning:
++                        if jo_words is not None:
++                            self._jo_forbid_stop(cumulative_index, jo_words)
++                            jo_rows += 1
++                        if token in jo_stop_ids:
++                            jo_draft_stops += 1
+                     advance_grammar = apply_bitmask
+                     if token == -1:
+                         apply_bitmask = False
+                         advance_grammar = False
+                     elif not apply_bitmask and window_start + i == reasoning_end_index:
++                        # recipe (jor): the marker's own row was a reasoning row;
++                        # the rows after it belong to the grammar.
++                        jo_reasoning = False
+                         # Reasoning ended mid-window. Constrain the rest
+                         # of the window via bitmask. Skip grammar advance
+                         # through the marker (it is reasoning content);
+@@ -378,9 +526,14 @@
+                         bitmask[cumulative_index].copy_(bitmask[failed_index])
+                     else:
+                         self._fill_bitmasks(((grammar, cumulative_index, bonus_apply),))
++                        if jo_reasoning and jo_words is not None:
++                            self._jo_forbid_stop(cumulative_index, jo_words)
++                            jo_rows += 1
+                     cumulative_index += 1
+                 if state_advancements > 0:
+                     grammar.rollback(state_advancements)
++                if jo_step:
++                    self._jo_count(1, jo_rows, jo_draft_stops, 0)
+ 
+         bitmask_tensor = self._grammar_bitmask
+         if cumulative_index < bitmask_tensor.shape[0]:
+@@ -476,6 +629,8 @@
+             structured_req.reasoning_end_token_index = end_index
+             return True
+ 
++        if (_JO_NOSTOP or _JO_LOG) and new_token_ids:
++            self._jo_note_stop_in_reasoning(request, new_token_ids)
+         return False
+ 
+     @staticmethod

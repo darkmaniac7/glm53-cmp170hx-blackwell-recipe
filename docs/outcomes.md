@@ -11,8 +11,9 @@ What the two-host layout measured, with the conditions each number needs. For th
   drafter layer). The hosts are joined by a direct 100 GbE link (ConnectX-5), NCCL over IB verbs on it.
 - Checkpoint: GLM-5.3 (753B MoE), NVFP4 experts with INT8 residue (the hybrid of cebeuq's recipe, built from the
   abliterated NVFP4 checkpoint), 288 files, 418 GiB.
-- Engine: cebeuq's recipe (pinned sm_80 vLLM image and patches) plus this repository's three overlays. MTP with 2
-  draft tokens, PipeSpec, probabilistic drafts, P2P custom all-reduce inside each CMP pair, int8-tile KV cache.
+- Engine: cebeuq's recipe (pinned sm_80 vLLM image and patches) plus this repository's overlays ppfix, g4 and sq
+  (g5 and jor followed on 2026-11-05, below). MTP with 2 draft tokens, PipeSpec, probabilistic drafts, P2P custom
+  all-reduce inside each CMP pair, int8-tile KV cache.
 - 524,288-token context, 8 sequences, measured at the engine's own port on the night of 2026-11-04/05.
 - Single-stream rows are 1,024-token answers to the same three prompts: a JSON array, a Python module, a 900-word
   essay. "Sampled" means temperature 0.9, top_p 0.9, top_k 80, presence penalty 0.5, repetition penalty 1.02.
@@ -28,7 +29,7 @@ What the two-host layout measured, with the conditions each number needs. For th
 | Long-context chat, one stream: first token at an 83K-token prompt, then a warm turn | 20 s cold, 5.7 s warm; 68-74 tok/s per stream |
 | Long-context chat, four concurrent streams at 83K each | first token p50 14 s (the four cold prefills queue: 22 to 87 s), warm turns 6 s, 33 tok/s per stream, 76 aggregate |
 | Three concurrent 100K-token coding sessions, three turns each | first turn 55 s median, later turns 3.2 s, 29 tok/s aggregate |
-| Structured output (json_schema strict, named tool choice, json_object) at 1 and 8 streams | no HTTP 5xx, every reply valid; constrained decode 40-73 tok/s single stream |
+| Structured output (json_schema strict, named tool choice, json_object) at 1 and 8 streams | no HTTP 5xx, every reply valid; constrained decode 40-73 tok/s single stream (8 streams with g5 and json_object with jor: below) |
 | KV cache capacity | 817,024 tokens (1.56 x the 524,288-token maximum request) |
 | Quality floor | 90.2% top-1 agreement with the TP8 goldens, NLL within 0.02% |
 | Speculative acceptance (accepted drafts per verified 2-draft chunk) | 1.28 at temperature 0, 1.21 sampled on the same prompts, 1.07-1.20 on the long-context chat turns that night (0.97 to 1.61 across later reruns: it depends on the text a run writes); 3.0 committed tokens per PipeSpec epoch |
@@ -54,7 +55,17 @@ Blackwell stage adds about 10% single-stream, 13 to 28% 8-stream aggregate, abou
   the eight-CMP layout fails the quality floor (86.98%); it was not switched off on the two-host layout. It costs
   no speed.
 - **The grammar bitmask fix** (overlay `g4`) is what makes structured output usable with drafts on. Requests without a
-  grammar measured the same with and without it.
+  grammar measured the same with and without it. Since 2026-11-05 its fix is superseded by g5.
+- **Drafts kept per request** (overlay `g5`, a port of vLLM PR 63219; the g4 and the g5 engine back to back on this
+  layout on 2026-11-05, the structured-output probe at 8 streams): structured requests accept 1.60 drafts per step
+  instead of 0.31, each constrained stream runs 1.75 to 1.85x as fast, the probe's aggregate goes from 76.6 to
+  133.4 tok/s, and no draft window is left with placeholders. At one stream and for requests without a grammar
+  nothing moved beyond the run-to-run spread.
+- **No end of turn inside the thinking block** (overlay `jor`, on top of g5, 2026-11-05): json_object with thinking on
+  at 8 streams on one fixed prompt, at temperature 0 and at the sampling defaults, came back with empty content in
+  29 of 2,000 replies without the rule and in 0 of 2,000 with it (Fisher exact p = 3.4e-9). With the rule on, every
+  structured request left its thinking block (3,080 of 3,080). Optional; the alternative without an engine change
+  is to skip the thinking for structured requests (`"thinking_token_budget": 0`).
 
 ## Choosing the split
 
