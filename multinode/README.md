@@ -24,10 +24,12 @@ run it.
 | `node.sh` | starts one node: builds the node's view of the weights, then one `docker run` |
 | `layouts/pp5bw30.env` | TP2 x PP5: two Blackwells + eight CMPs (the layout of the outcomes page) |
 | `layouts/pp5bw30-jor.env` | pp5bw30 with the optional jor overlay and its switches ([overlays/jor](../overlays/jor/)) |
+| `layouts/pp5bw30-s0r4bs.env` | the current form: pp5bw30 with jor, the two PipeSpec overhead cuts ([overlays/bs](../overlays/bs/)) and stage 0 at 4-bit ([tools/stage0-4bit](../tools/stage0-4bit/)) |
 | `layouts/l62b.env` | TP2 x PP4: two Blackwells + six CMPs, two CMPs free |
 | `host.env.example` | per-host values: addresses, image, paths, memory, read cap |
 | `mounts.list` | the 23 patch files every node mounts, with their targets (ppfix, g4, sq, g5; the default) |
 | `mounts-jor.list` | the same with the two jor files in place of two g4 files |
+| `mounts-bs.list` | the jor set with the two bs files in place of g5's model runner and the recipe's pp_utils (the current form) |
 | `mounts-g4.list` | the 22 files of the set before 2026-11-05 (ppfix, g4, sq), for history |
 | `node.env` | engine and NCCL environment of every node |
 | `view-build.py` | per-node directory with only the node's shards and a filtered index |
@@ -41,7 +43,8 @@ run it.
    `HOST_RECIPE_DIR` in `host.env` points at that checkout.
 2. **Weights, one local copy per host.** Copy the hybrid checkpoint to a local drive on each host and verify
    sha256 of all 288 files against the source. On the CMP host use an NVMe drive and set the read cap in
-   `host.env`. No NFS.
+   `host.env`. No NFS. For the current form, build the stage-0 4-bit checkpoint from it with
+   [tools/stage0-4bit](../tools/stage0-4bit/) and use that directory on both hosts.
 3. **Images.** On both hosts: `docker build -t glm53-multinode:base -f image/Dockerfile.base image/`. For the
    Blackwell host, rebuild the two extension libraries for sm_120 and build the second image (next section).
 4. **`host.env` on each host** from `host.env.example`: the leader's address on the link (the same on both
@@ -50,13 +53,14 @@ run it.
 5. **Dry run each node**: `DRYRUN=1 ./node.sh layouts/pp5bw30.env host.env <rank>` prints the layers the node
    takes and the full `docker run`, and fails on a missing patch file. A layout picks its patch set with `MOUNTS`
    (default `mounts.list`) and can add switches to the node environment with `EXTRA_ENV`; `layouts/pp5bw30-jor.env`
-   does both.
+   and `layouts/pp5bw30-s0r4bs.env` do both.
 6. **Start, node 0 first.** On the Blackwell host: `./node.sh layouts/pp5bw30.env host.env 0`. Within a few
    seconds, on the CMP host: ranks 1, 2, 3 and 4. All nodes load in parallel; the leader's API answers
    `/health` when every stage is up (6 to 11 minutes from local copies).
 7. **Check before serving.** `curl http://<API_HOST>:<API_PORT>/health` on the leader, a one-token completion, then
    the quality gate against TP8 goldens and the structured-output probe
-   ([docs/quality-floor.md](../docs/quality-floor.md)). Expect about 90.2% agreement.
+   ([docs/quality-floor.md](../docs/quality-floor.md)). Expect about 90.2% agreement, or 89.76 to 89.87% with stage
+   0 at 4-bit against goldens captured with stage 0 at INT8.
 8. **Stop**: `docker rm -f glm53-<TAG>-n<rank>` for every node, CMP nodes and leader alike.
 
 ## The sm_120 image
@@ -96,6 +100,9 @@ the model-level proof is the quality gate.
   CMP host's draw.
 - **The API has no authentication.** `API_HOST` defaults to loopback; put anything wider behind your own gate.
 - **The checkpoint is abliterated**; add the safeguards your use needs.
+- **Send `repetition_penalty: 1.0` with every request**, or make 1.0 the default in front of the engine. The
+  checkpoint's `generation_config.json` sets 1.1 (with temperature 1.0), vLLM applies it to every request that does
+  not set it, and long free-form output then turns into word salad (README, "Known issue").
 
 ## What was and was not measured
 
@@ -103,6 +110,8 @@ Measured: both layout files, with the environment of this directory, on the hard
 2026-11-05), with the patch set of `mounts-g4.list` or a part of it, as each number in
 [docs/outcomes.md](../docs/outcomes.md) says. On 2026-11-05 the pp5bw30 layout also ran with the set of `mounts.list`
 (g5) and with that of `mounts-jor.list` plus the jor switches (`pp5bw30-jor.env`); l62b has not run with g5 or jor.
+Since 2026-11-11 the served form is `pp5bw30-s0r4bs.env` (the set of `mounts-bs.list`, the jor and bs switches,
+stage 0 at 4-bit).
 Not measured: other cards as the fast stage, a switched or slower link, TCP instead of RDMA between the hosts,
 more than two hosts. The launcher here is the measured one with site paths and operational plumbing removed; its
 dry run was compared against the original's mounts, layer ranges and arguments, and it has not itself started an

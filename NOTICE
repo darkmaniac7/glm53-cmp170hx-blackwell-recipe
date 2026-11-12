@@ -1,0 +1,57 @@
+glm53-cmp170hx-blackwell-recipe
+Copyright (c) 2026 darkmaniac7
+
+What this repository contains, and what derives from what.
+
+1. Written for this repository: MIT (LICENSE)
+   README.md, docs/, the overlay READMEs, every compose file under overlays/*/engine/, overlays/g4/bench/,
+   overlays/sq/pipespec/, multinode/, tools/apply-overlays.sh and tools/stage0-4bit/. The compose files follow
+   the form of cebeuq's recipe. tools/stage0-4bit/stage0_4bit.py calls the compressed-tensors library
+   (https://github.com/vllm-project/compressed-tensors, Apache-2.0) and copies none of its code.
+
+2. Modified vLLM source files: Apache License 2.0 (LICENSES/Apache-2.0.txt)
+   Every file under overlays/*/patches/vllm/ but one is a modified copy of a vLLM source file
+   (https://github.com/vllm-project/vllm) as shipped in the engine image the recipe pins,
+   lazymio/vllm-backport@sha256:2627d2a97e7f539b99ac98f511c589f5f520d3fc5630b195aca7f6ef865ead4e, built from
+   https://github.com/wtdcode/vllm-backport at 29e66dad461b11caae6039f510eaa7913f9dfb19. Each file keeps its
+   header "SPDX-License-Identifier: Apache-2.0" and "SPDX-FileCopyrightText: Copyright contributors to the vLLM
+   project". Several start from cebeuq's patched copy of the vLLM file in
+   https://github.com/cebeuq/glm53-cmp170hx-recipe (commit 31c0934958a8b0892b6de139e37d2bfe18926ae4; that
+   repository is MIT, Copyright (c) 2026 cebeuq, LICENSES/MIT-cebeuq.txt). vLLM ships no NOTICE file.
+
+   The one exception is sq/sq_pipespec_core.py: it derives from cebeuq's own PipeSpec module
+   (patches/vllm/pipespec_core.py in his recipe, mounted as vllm/v1/cmp_pipespec.py, a file the image does not
+   have) and keeps the "SPDX-License-Identifier: Apache-2.0" header he gave it.
+
+   The changes made here are marked in the files with "recipe" comment tags and shown in full in each overlay:
+   patches/diffs/<file>.diff against the image original, delta/<file>.vs-<base>.diff against the file it
+   derives from where that is not the image original. These diffs reproduce the code they show and are under
+   the same licence as the files they apply to, not under the MIT licence of section 1.
+
+   File (overlays/<overlay>/patches/vllm/)   Derives from
+   ppfix/ppfix_gpu_worker.py                 vLLM v1/worker/gpu_worker.py
+   g4/grammar_sched_output.py                vLLM v1/core/sched/output.py
+   g4/grammar_structured_output_init.py      vLLM v1/structured_output/__init__.py
+   g4/grammar_gpu_structured_outputs.py      vLLM v1/worker/gpu/structured_outputs.py
+   g4/grammar_batch_shard.py                 vLLM v1/worker/gpu/sample/batch_shard.py
+   g4/grammar_rejection_sampler.py           vLLM v1/worker/gpu/spec_decode/rejection_sampler.py
+   g4/grammar_scheduler.py                   cebeuq's patches/vllm/pipespec_scheduler.py
+   g4/grammar_model_runner.py                cebeuq's patches/vllm/pipespec_model_runner.py
+   sq/sq_pipespec_core.py                    cebeuq's patches/vllm/pipespec_core.py
+   sq/sq_pipespec_ar_speculator.py           cebeuq's patches/vllm/pipespec_ar_speculator.py
+   sq/sq_pipespec_model_runner.py            cebeuq's patches/vllm/pipespec_model_runner.py
+   sq/sq_grammar_model_runner.py             cebeuq's patches/vllm/pipespec_model_runner.py, with the g4 changes
+   g5/g5_scheduler.py                        g4/grammar_scheduler.py
+   g5/g5_model_runner.py                     sq/sq_grammar_model_runner.py
+   g5/g5_spec_decode_utils.py                vLLM v1/worker/gpu/spec_decode/utils.py
+   jor/jor_structured_output_init.py         g4/grammar_structured_output_init.py
+   jor/jor_gpu_structured_outputs.py         g4/grammar_gpu_structured_outputs.py
+   bs/bs_model_runner.py                     g5/g5_model_runner.py
+   bs/bs_pp_utils.py                         cebeuq's patches/vllm/pipespec_pp_utils.py
+
+   The g4 overlay ports vLLM pull request 54442 and the g5 overlay ports vLLM pull request 63219.
+
+3. Not in this repository
+   No model weights, no driver source and no compiled libraries. The engine image, the P2P driver patch, the
+   checkpoints (dealignai/GLM-5.3-UNCENSORED-NVFP4 and the hybrid checkpoint cebeuq's tool converts from it) and
+   GLM-5.3 itself have their own licences; see their repositories and model cards.

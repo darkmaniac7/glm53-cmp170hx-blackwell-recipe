@@ -3,6 +3,9 @@
 What the two-host layout measured, with the conditions each number needs. For the method behind the quality row see
 [quality-floor.md](quality-floor.md); for how much a single number moves between reloads see [noise.md](noise.md).
 
+This page is the 2026-11-04/05 form. The numbers of the current form (2026-11-11: stage 0 at 4-bit, the two
+PipeSpec overhead cuts, g5 and jor) are in the [README](../README.md#the-current-form-2026-11-11).
+
 ## Conditions
 
 - Layout `pp5bw30` ([multinode/layouts/pp5bw30.env](../multinode/layouts/pp5bw30.env)): tensor parallel 2 x pipeline

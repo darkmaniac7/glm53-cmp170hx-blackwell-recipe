@@ -27,6 +27,13 @@ is marked acceptable by the tool's second tier.
 | Two hosts, pp5bw30, three draft tokens | 90.19% | +0.00% | 0.056 / 0.71 |
 | Two hosts, pp5bw30, without the grammar overlay | 90.38% | -0.96% | 0.056 / 0.73 |
 
+**Stage 0 at 4-bit (the current form).** These goldens were captured with stage 0 at INT8. A stage 0 at 4-bit
+([tools/stage0-4bit](../tools/stage0-4bit/)) is a different model there, so it reads as an agreement drop by
+construction: 89.76 to 89.87% over three readings (2026-11-06 and 2026-11-11), just under the floor, with an NLL 0.84
+to 1.22% lower than the goldens. A blind comparison of 32 matched outputs found no difference, and the 4-bit stage 0
+is served. Against goldens captured with stage 0 at INT8, read a 4-bit stage 0 by its NLL and its free runs, not by
+the agreement alone.
+
 The gate runs at temperature 0. For sampled requests the check is the NLL of sampled text under the model (6 x 384
 tokens): 0.61 to 0.70 with greedy and with probabilistic drafts alike, which is the probe's own run-to-run spread.
 
