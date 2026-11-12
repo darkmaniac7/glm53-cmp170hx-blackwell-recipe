@@ -1,0 +1,34 @@
+# Patch files mounted read-only into every node for the current form (layouts/pp5bw30-s0r4bs.env): the set of
+# mounts-jor.list with the two bs files in place of g5's model runner and the recipe's pp_utils (two PipeSpec
+# overhead cuts). Pair it with CMP_BS_RXLATE=1 and CMP_BS_P1EARLY=1 in the node environment; with both unset the two
+# files behave as the files they replace.
+# <file in patches/vllm> <target below vllm/>
+marlin_utils_fp4.py                 model_executor/layers/quantization/utils/marlin_utils_fp4.py
+kvfp8_dsv32_kernels.py              models/deepseek_v32/common/kernels.py
+mqa_logits_triton.py                v1/attention/ops/mqa_logits_triton.py
+xpu_mla_sparse.py                   v1/attention/backends/mla/xpu_mla_sparse.py
+config_vllm.py                      config/vllm.py
+engine_core.py                      v1/engine/core.py
+indexer.py                          v1/attention/backends/mla/indexer.py
+vocab_parallel_embedding.py         model_executor/layers/vocab_parallel_embedding.py
+v32_mtp.py                          models/deepseek_v32/nvidia/mtp.py
+p2p_custom_all_reduce.py            distributed/device_communicators/custom_all_reduce.py
+kvfp8_sparse_mla.py                 v1/attention/ops/kvfp8_sparse_mla.py
+# overlay ppfix
+ppfix_gpu_worker.py                 v1/worker/gpu_worker.py
+# overlay g4: three of its seven files (g5 replaces its scheduler and model runner, jor two more)
+grammar_sched_output.py             v1/core/sched/output.py
+grammar_batch_shard.py              v1/worker/gpu/sample/batch_shard.py
+grammar_rejection_sampler.py        v1/worker/gpu/spec_decode/rejection_sampler.py
+# overlay sq (its model runner is replaced by g5's, which carries the sq hunks)
+sq_pipespec_core.py                 v1/cmp_pipespec.py
+sq_pipespec_ar_speculator.py        v1/worker/gpu/spec_decode/autoregressive/speculator.py
+# overlay g5 (its model runner is replaced by bs's, which carries the g5 and sq hunks)
+g5_scheduler.py                     v1/core/sched/scheduler.py
+g5_spec_decode_utils.py             v1/worker/gpu/spec_decode/utils.py
+# overlay jor (replaces grammar_structured_output_init.py and grammar_gpu_structured_outputs.py)
+jor_structured_output_init.py       v1/structured_output/__init__.py
+jor_gpu_structured_outputs.py       v1/worker/gpu/structured_outputs.py
+# overlay bs (replaces g5_model_runner.py and the recipe's pipespec_pp_utils.py)
+bs_model_runner.py                  v1/worker/gpu/model_runner.py
+bs_pp_utils.py                      v1/worker/gpu/pp_utils.py

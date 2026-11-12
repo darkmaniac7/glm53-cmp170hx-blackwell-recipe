@@ -1,0 +1,2 @@
+ea5ed26fd6266ab6094b00971c5a15fc1b7a7dc896acde291474479dce4fd5c1  patches/vllm/bs_model_runner.py
+ca68a57812040632907eac35c18d347b94db38a19c7aa1b5e19a329fa632b9ab  patches/vllm/bs_pp_utils.py

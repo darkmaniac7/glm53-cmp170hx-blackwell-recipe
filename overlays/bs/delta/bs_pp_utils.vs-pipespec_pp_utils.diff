@@ -1,0 +1,136 @@
+--- a/patches/vllm/pipespec_pp_utils.py
++++ b/patches/vllm/pipespec_pp_utils.py
+@@ -19,6 +19,24 @@
+ from vllm.v1.worker.gpu.buffer_utils import async_copy_to_gpu
+ from vllm.v1.worker.gpu.input_batch import InputBatch
+ 
++# recipe (bs): CMP_BS_RXLATE=1 makes the PP ranks named by
++# CMP_BS_RXLATE_RANKS (default: ranks 1..PP-2) post the broadcast receive of a
++# PipeSpec chunk-A step only after the forward of the chunk B that follows it.
++# A pending NCCL broadcast receive slows the forward running beside it on a
++# CMP 170HX (measured on the two-host layout: chunk B's forward is slower on
++# ranks 1 and 2). The order of collectives on the broadcast communicator does
++# not change: a deferred receive is always posted before any later one.
++# Unset or 0 = the base file's behaviour (every added statement sits behind
++# `_BS_RXLATE`, `_bs_defer_a` or a None test that is never true then).
++import os as _bs_os
++
++_BS_RXLATE = _bs_os.environ.get("CMP_BS_RXLATE", "0") == "1"
++_BS_RXLATE_RANKS = _bs_os.environ.get("CMP_BS_RXLATE_RANKS", "")
++if _BS_RXLATE:
++    from vllm.logger import init_logger as _bs_init_logger
++
++    _bs_logger = _bs_init_logger(__name__)
++
+ 
+ @dataclass
+ class PendingRecv:
+@@ -104,6 +122,22 @@
+         # consuming a chunk-B slot, valid only for the step right after.
+         self.p2_stash: dict[int, tuple[torch.Tensor, torch.cuda.Event]] = {}
+         self.p2_stash_prev: dict[int, tuple[torch.Tensor, torch.cuda.Event]] = {}
++        # recipe (bs): (slot, num_reqs) of a chunk-A receive that is not posted yet.
++        self._bs_deferred: tuple[PendingRecv, int] | None = None
++        self._bs_defer_a = False
++        if _BS_RXLATE and not self.is_last_rank:
++            _bs_pp = get_pp_group()
++            if _BS_RXLATE_RANKS:
++                _bs_ranks = {int(x) for x in _BS_RXLATE_RANKS.split(",") if x.strip()}
++            else:
++                _bs_ranks = set(range(1, _bs_pp.world_size - 1))
++            self._bs_defer_a = _bs_pp.rank_in_group in _bs_ranks
++            _bs_logger.info(
++                "CMP bs: PP rank %d of %d defers chunk-A broadcast receives: %s",
++                _bs_pp.rank_in_group,
++                _bs_pp.world_size,
++                self._bs_defer_a,
++            )
+ 
+     def on_req_idx_freed(self, req_idx: int) -> None:
+         self.req_idx_gen_np[req_idx] += 1
+@@ -208,6 +242,10 @@
+             idx_mapping_np = np.where(exclude_mask, -1, slot.idx_mapping_np)
+             idx_mapping = async_copy_to_gpu(idx_mapping_np, device=self.device)
+ 
++        if slot.event is None:
++            # recipe (bs): this slot's receive was deferred and never flushed.
++            self.bs_flush_deferred()
++            assert slot.event is not None, "CMP bs: deferred slot without a receive"
+         self.main_stream.wait_event(slot.event)
+         if slot.draft_tokens is not None and draft_tokens_to_update is not None:
+             draft_tokens = slot.draft_tokens
+@@ -281,6 +319,10 @@
+         PipeSpec: fmt "A" receives no drafts; fmt "B" receives P1 (k
+         drafts, covered by `event`) and P2 (k+1 drafts, covered by `event2`)."""
+         assert not self.is_last_rank
++        if self._bs_deferred is not None:
++            # recipe (bs): a deferred chunk-A receive is posted first (collective
++            # order); from sample_tokens of chunk B this is behind B's forward.
++            self.bs_flush_deferred()
+         need_sampled_mask = compute_need_sampled_mask(input_batch)
+         if need_sampled_mask is None:
+             # Leave this step's reserved slot as None.
+@@ -291,6 +333,26 @@
+         gen_at_receive_np = self.req_idx_gen_np[input_batch.idx_mapping_np]
+ 
+         num_reqs = input_batch.num_reqs
++        if self._bs_defer_a and fmt == "A":
++            # recipe (bs): reserve the slot now, post the two receives later
++            # (bs_flush_deferred). Format A carries no drafts and no P2.
++            slot = PendingRecv(
++                None,  # type: ignore[arg-type]
++                None,  # type: ignore[arg-type]
++                None,  # type: ignore[arg-type]
++                None,  # type: ignore[arg-type]
++                input_batch.idx_mapping,
++                input_batch.idx_mapping_np,
++                need_sampled_mask,
++                gen_at_receive_np,
++                None,
++                fmt,
++                None,
++                None,
++            )
++            self.queue[-1] = slot
++            self._bs_deferred = (slot, num_reqs)
++            return bool(need_sampled_mask.all())
+         with torch.cuda.stream(self.broadcast_stream):
+             self.broadcast_stream.wait_stream(self.main_stream)
+             sampled_tokens = torch.empty(
+@@ -352,6 +414,36 @@
+         )
+         return bool(need_sampled_mask.all())
+ 
++    def bs_flush_deferred(self) -> None:
++        """recipe (bs): post the receive of a deferred chunk-A slot now, behind
++        everything queued on the main stream so far (same calls, same order
++        and same sizes as `receive` issues for format A)."""
++        deferred = self._bs_deferred
++        if deferred is None:
++            return
++        self._bs_deferred = None
++        slot, num_reqs = deferred
++        with torch.cuda.stream(self.broadcast_stream):
++            self.broadcast_stream.wait_stream(self.main_stream)
++            sampled_tokens = torch.empty(
++                num_reqs, self.max_sample_len, dtype=torch.int64, device=self.device
++            )
++            combined = torch.empty(2, num_reqs, dtype=torch.int32, device=self.device)
++            torch.distributed.broadcast(
++                sampled_tokens, src=self.last_rank, group=self.broadcast_group
++            )
++            torch.distributed.broadcast(
++                combined, src=self.last_rank, group=self.broadcast_group
++            )
++            event = self.broadcast_stream.record_event()
++            num_sampled, num_rejected = combined.unbind(dim=0)
++            sampled_tokens.record_stream(self.main_stream)
++            combined.record_stream(self.main_stream)
++        slot.sampled_tokens = sampled_tokens
++        slot.num_sampled = num_sampled
++        slot.num_rejected = num_rejected
++        slot.event = event
++
+     def broadcast(
+         self,
+         sampled_token_ids: torch.Tensor,

@@ -1,0 +1,146 @@
+--- a/patches/vllm/g5_model_runner.py
++++ b/patches/vllm/g5_model_runner.py
+@@ -183,6 +183,22 @@
+ )
+ from vllm.v1.worker.workspace import lock_workspace, use_workspace_lane
+ 
++# recipe (bs): two switchable PipeSpec overhead cuts, both off
++# unless set (unset = the base file's behaviour):
++#  CMP_BS_RXLATE=1   (with pp_utils.py) PP ranks 1..PP-2 post chunk A's
++#                    broadcast receive after chunk B's forward; this file only
++#                    adds the flush for a chunk A that no chunk B follows.
++#  CMP_BS_P1EARLY=1  last PP rank, dropped chunk B: the dropped-chunk message
++#                    and P1 are sent from execute_model of step B right after
++#                    the drop decision, and the P2 draft chain (three chain
++#                    steps) is issued behind them instead of in step A. Same
++#                    messages in the same order; nothing is sent before the
++#                    step that proves chunk B exists.
++import os as _bs_os
++
++_BS_RXLATE = _bs_os.environ.get("CMP_BS_RXLATE", "0") == "1"
++_BS_P1EARLY = _bs_os.environ.get("CMP_BS_P1EARLY", "0") == "1"
++
+ logger = init_logger(__name__)
+ 
+ 
+@@ -351,6 +367,16 @@
+         self._ps_b_drafts: torch.Tensor | None = None  # drafts chunk B verifies
+         self._ps_pending: tuple | None = None  # (p1, ev1, p2, ev2) of a failed A
+         self._ps_skip: list[str] | None = None  # dropped chunk B request ids
++        # recipe (bs): dropped chunk B already sent from execute_model; req_idx of
++        # a failed chunk A whose P2 chain is still to run.
++        self._bs_sent = False
++        self._bs_defer_req = -1
++        if self._ps_on and (_BS_RXLATE or _BS_P1EARLY):
++            logger.info(
++                "CMP bs: rxlate=%s p1early=%s",
++                _BS_RXLATE,
++                _BS_P1EARLY,
++            )
+         self._ps_flag_host: torch.Tensor | None = None
+         self._ps_flag_event: torch.cuda.Event | None = None
+ 
+@@ -1633,6 +1659,13 @@
+             self.update_requests(scheduler_output)
+             self.block_tables.apply_staged_writes()
+             if scheduler_output.total_num_scheduled_tokens == 0:
++                if (
++                    _BS_RXLATE
++                    and self.pp_handler is not None
++                    and not self.is_last_pp_rank
++                ):
++                    # recipe (bs): no chunk B followed a deferred chunk A.
++                    self.pp_handler.bs_flush_deferred()
+                 # No need to run the model.
+                 empty_output = self.kv_connector.no_forward(scheduler_output)
+                 return self._merge_ec_connector_no_forward(
+@@ -1641,6 +1674,10 @@
+             if self._ps_on and self._ps_pre_execute(scheduler_output):
+                 # PipeSpec: dropped chunk B on the last rank. Drain the
+                 # hidden states stage PP-2 sent; sample_tokens() reports it.
++                if _BS_P1EARLY:
++                    # recipe (bs): the chunk's message, P1 and the deferred P2 chain
++                    # go out before the drain.
++                    self._bs_send_dropped()
+                 if isinstance(intermediate_tensors, IntermediateTensors):
+                     _ = intermediate_tensors.tensors
+                 return None
+@@ -2191,6 +2228,9 @@
+             ((req_id, mark),) = marks.items()
+         self._ps_mark = mark
+         if not self.is_last_pp_rank:
++            if _BS_RXLATE and mark != "B" and self.pp_handler is not None:
++                # recipe (bs): a deferred chunk-A receive waits only for its chunk B.
++                self.pp_handler.bs_flush_deferred()
+             return False
+         k = self.num_speculative_steps
+         req_idx = self.req_states.req_id_to_index[req_id] if req_id else -1
+@@ -2340,6 +2380,16 @@
+             self.pp_handler.broadcast_rows(p1, ev1)
+         spec = self.speculator
+         p2_ok = getattr(spec, "num_p2", 0) == k + 1 and spec._chain_ctx is not None
++        if _BS_P1EARLY and not send_now and p2_ok and num_reqs == 1:
++            # recipe (bs): failed chunk A. Park P1 only; the P2 chain is continued
++            # in step B's execute_model (_bs_send_dropped), behind the
++            # dropped-chunk message and P1, so the host reaches that send
++            # before P1 is ready on the GPU.
++            self._ps_pending = (p1, ev1, None, None)
++            self._bs_defer_req = int(input_batch.idx_mapping_np[0])
++            self._ps_p2 = None
++            self._ps_p2_req = -1
++            return
+         if p2_ok:
+             with use_workspace_lane(self._draft_workspace_lane):
+                 p2 = spec.continue_chain()[:num_reqs].clone()
+@@ -2364,6 +2414,14 @@
+         pending = self._ps_pending
+         self._ps_pending = None
+         self._ps_expect_b = False
++        if self._bs_sent:
++            # recipe (bs): already sent from execute_model (_bs_send_dropped).
++            self._bs_sent = False
++            return ModelRunnerOutput(
++                req_ids=req_ids,
++                req_id_to_index={rid: i for i, rid in enumerate(req_ids)},
++                sampled_token_ids=[[] for _ in req_ids],
++            )
+         assert pending is not None, "PipeSpec: dropped chunk B without epoch drafts"
+         p1, ev1, p2, ev2 = pending
+         self.pp_handler.broadcast_dropped_chunk(len(req_ids))
+@@ -2375,6 +2433,36 @@
+             sampled_token_ids=[[] for _ in req_ids],
+         )
+ 
++    def _bs_send_dropped(self) -> None:
++        """recipe (bs, CMP_BS_P1EARLY=1): last rank, dropped chunk B, called from
++        execute_model right after the drop decision. Sends what
++        `_ps_dropped_chunk_output` would send one RPC later (same messages,
++        same order) and runs the P2 draft chain that `_ps_finish_epoch` left
++        out in step A."""
++        assert self.pp_handler is not None and self._ps_skip is not None
++        pending = self._ps_pending
++        self._ps_pending = None
++        assert pending is not None, "PipeSpec: dropped chunk B without epoch drafts"
++        p1, ev1, p2, ev2 = pending
++        num_reqs = len(self._ps_skip)
++        self.pp_handler.broadcast_dropped_chunk(num_reqs)
++        self.pp_handler.broadcast_rows(p1, ev1)
++        if p2 is None:
++            k = self.num_speculative_steps
++            spec = self.speculator
++            p2_ok = getattr(spec, "num_p2", 0) == k + 1 and spec._chain_ctx is not None
++            if p2_ok:
++                with use_workspace_lane(self._draft_workspace_lane):
++                    p2 = spec.continue_chain()[:num_reqs].clone()
++            else:
++                p2 = torch.zeros(num_reqs, k + 1, dtype=torch.int64, device=self.device)
++            ev2 = torch.cuda.Event()
++            ev2.record(self.main_stream)
++            self._ps_p2 = p2 if (p2_ok and num_reqs == 1) else None
++            self._ps_p2_req = self._bs_defer_req
++        self.pp_handler.broadcast_rows(p2, ev2)
++        self._bs_sent = True
++
+     def take_draft_token_ids(self) -> DraftTokenIds | None:
+         return self.draft_tokens_handler.get_draft_tokens()
+ 

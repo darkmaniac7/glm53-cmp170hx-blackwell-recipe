@@ -1,0 +1,15 @@
+# Overlay: two PipeSpec overhead cuts. The middle pipeline ranks post the receive of a chunk-A step after the forward of
+# the chunk B behind it, and the last rank sends a dropped chunk B's message and P1 as soon as it decides to drop.
+# Same messages, same order, same math. PipeSpec runs only while one stream decodes alone, so multi-stream decode
+# is untouched.
+# Must come after compose.g5.yaml (and after compose.jor.yaml when that is in the chain): it replaces g5's
+# model_runner.py and the recipe's pp_utils.py mounts. With both switches at 0 the two files behave as the files
+# they derive from.
+services:
+  vllm:
+    environment:
+      CMP_BS_RXLATE: "${CMP_BS_RXLATE:-1}"    # 1 = PP ranks 1..PP-2 post chunk A's broadcast receive after chunk B's forward
+      CMP_BS_P1EARLY: "${CMP_BS_P1EARLY:-1}"  # 1 = last rank, dropped chunk B: its message and P1 go out right after the drop decision
+    volumes:
+      - ../patches/vllm/bs_model_runner.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/model_runner.py:ro
+      - ../patches/vllm/bs_pp_utils.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/pp_utils.py:ro
